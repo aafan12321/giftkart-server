@@ -1,7 +1,7 @@
 {
   "name": "giftkart-payment-server",
   "version": "1.0.0",
-  "description": "GiftKart Razorpay payment backend",
+  "description": "GiftKart payment + notifications server",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
@@ -10,7 +10,9 @@
   "dependencies": {
     "cors": "^2.8.5",
     "express": "^4.18.2",
-    "razorpay": "^2.9.2"
+    "razorpay": "^2.9.2",
+    "nodemailer": "^6.9.9",
+    "twilio": "^5.3.3"
   },
   "devDependencies": {
     "nodemon": "^3.0.2"
