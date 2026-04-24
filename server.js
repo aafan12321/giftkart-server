@@ -20,7 +20,7 @@ const transporter = nodemailer.createTransport({
   service: 'gmail',
   auth: {
     user: 'malikaafan50@gmail.com',
-    pass: 'vpql ywim jfyb alzy',
+    pass: 'vpqlywimjfybalzy',
   },
 });
 
@@ -32,98 +32,65 @@ const twilioClient = twilio(
 
 // ─── Health check ─────────────────────────────────────────────────────────────
 app.get('/', (req, res) => {
-  res.json({ status: 'GiftKart Server running ✅' });
+  res.json({ status: 'GiftKart Server v3 running ✅ — email + whatsapp enabled' });
 });
 
-// ─── Helper: Send notifications (email + WhatsApp) ────────────────────────────
-async function sendOrderNotifications({ orderId, productName, amount, quantity, address, paymentMethod, paymentId }) {
+// ─── Send notifications (runs in background, never blocks response) ───────────
+function sendNotifications(data) {
+  const { orderId, productName, amount, quantity, address, paymentMethod, paymentId } = data;
   const orderDate = new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' });
-  const name = address?.name || 'Customer';
-  const phone = address?.phone || 'N/A';
+  const name = (address && address.name) ? address.name : 'Customer';
+  const phone = (address && address.phone) ? address.phone : 'N/A';
   const fullAddress = address
     ? `${address.house || ''}, ${address.area || ''}, ${address.city || ''} - ${address.pincode || ''}`
     : 'Not provided';
 
   // ── Email ──────────────────────────────────────────────────────────────────
-  try {
-    await transporter.sendMail({
-      from: '"GiftKart Orders 🎁" <malikaafan50@gmail.com>',
-      to: 'malikaafan50@gmail.com',
-      subject: `🎁 New Order - ${orderId} | ₹${amount} | ${productName}`,
-      html: `
-<!DOCTYPE html><html><head><style>
-  body{font-family:Arial,sans-serif;color:#333;line-height:1.6;margin:0;padding:0}
-  .wrap{max-width:600px;margin:0 auto;padding:20px}
-  .hdr{background:linear-gradient(135deg,#667eea,#764ba2);color:#fff;padding:30px;text-align:center;border-radius:12px 12px 0 0}
-  .body{background:#f9f9f9;padding:24px;border-radius:0 0 12px 12px}
-  .card{background:#fff;padding:20px;margin:16px 0;border-radius:10px;box-shadow:0 2px 6px rgba(0,0,0,0.08)}
-  .lbl{font-weight:700;color:#667eea;font-size:13px}
-  .val{color:#222;font-size:14px}
-  .total{font-size:28px;font-weight:800;color:#4CAF50;text-align:center;padding:16px 0}
-  .badge{background:#4CAF50;color:#fff;padding:3px 12px;border-radius:20px;font-size:12px;font-weight:700}
-  .method{background:#2196F3;color:#fff;padding:3px 12px;border-radius:20px;font-size:12px;font-weight:700}
-  .footer{text-align:center;color:#aaa;font-size:11px;margin-top:20px}
-  tr td{padding:6px 0}
-</style></head><body><div class="wrap">
-  <div class="hdr">
-    <h1 style="margin:0;font-size:26px">🎁 New Order!</h1>
-    <p style="margin:8px 0 0;font-size:16px">Order ID: <strong>${orderId}</strong></p>
-    <p style="margin:4px 0 0;font-size:13px;opacity:0.85">${orderDate}</p>
-  </div>
-  <div class="body">
-    <div class="card">
-      <h2 style="margin-top:0;color:#667eea;font-size:17px">📦 Order Details</h2>
-      <table width="100%">
-        <tr><td class="lbl">Product</td><td class="val">${productName}</td></tr>
-        <tr><td class="lbl">Quantity</td><td class="val">${quantity}</td></tr>
-        <tr><td class="lbl">Payment Method</td><td><span class="method">${paymentMethod}</span></td></tr>
-        <tr><td class="lbl">Status</td><td><span class="badge">✅ CONFIRMED</span></td></tr>
-        ${paymentId ? `<tr><td class="lbl">Payment ID</td><td class="val" style="font-size:12px">${paymentId}</td></tr>` : ''}
-      </table>
-    </div>
-    <div class="total">💰 ₹${amount}</div>
-    <div class="card">
-      <h2 style="margin-top:0;color:#667eea;font-size:17px">📍 Delivery Address</h2>
-      <table width="100%">
-        <tr><td class="lbl">Name</td><td class="val">${name}</td></tr>
-        <tr><td class="lbl">Phone</td><td class="val">+91 ${phone}</td></tr>
-        <tr><td class="lbl">Address</td><td class="val">${fullAddress}</td></tr>
-      </table>
-    </div>
-    <div class="footer"><p>GiftKart Automated Notification • ${orderDate}</p></div>
-  </div>
-</div></body></html>`,
-    });
-    console.log('📧 Email sent!');
-  } catch (e) {
-    console.error('❌ Email error:', e.message);
-  }
+  transporter.sendMail({
+    from: '"GiftKart Orders 🎁" <malikaafan50@gmail.com>',
+    to: 'malikaafan50@gmail.com',
+    subject: `🎁 New Order - ${orderId} | ₹${amount} | ${productName}`,
+    html: `<div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto">
+      <div style="background:linear-gradient(135deg,#667eea,#764ba2);color:white;padding:30px;text-align:center;border-radius:12px 12px 0 0">
+        <h1 style="margin:0">🎁 New Order!</h1>
+        <p style="margin:8px 0 0;font-size:18px">Order ID: <strong>${orderId}</strong></p>
+        <p style="margin:4px 0 0;font-size:13px;opacity:0.85">${orderDate}</p>
+      </div>
+      <div style="background:#f9f9f9;padding:24px;border-radius:0 0 12px 12px">
+        <div style="background:white;padding:20px;border-radius:10px;margin-bottom:16px;box-shadow:0 2px 6px rgba(0,0,0,0.08)">
+          <h2 style="color:#667eea;margin-top:0">📦 Order Details</h2>
+          <p><b style="color:#667eea">Product:</b> ${productName}</p>
+          <p><b style="color:#667eea">Quantity:</b> ${quantity}</p>
+          <p><b style="color:#667eea">Payment:</b> ${paymentMethod}</p>
+          <p><b style="color:#667eea">Status:</b> <span style="background:#4CAF50;color:white;padding:2px 10px;border-radius:20px;font-size:12px">✅ CONFIRMED</span></p>
+          ${paymentId ? `<p><b style="color:#667eea">Payment ID:</b> <span style="font-size:12px">${paymentId}</span></p>` : ''}
+        </div>
+        <div style="font-size:28px;font-weight:800;color:#4CAF50;text-align:center;padding:16px 0">💰 ₹${amount}</div>
+        <div style="background:white;padding:20px;border-radius:10px;box-shadow:0 2px 6px rgba(0,0,0,0.08)">
+          <h2 style="color:#667eea;margin-top:0">📍 Delivery Address</h2>
+          <p><b style="color:#667eea">Name:</b> ${name}</p>
+          <p><b style="color:#667eea">Phone:</b> +91 ${phone}</p>
+          <p><b style="color:#667eea">Address:</b> ${fullAddress}</p>
+        </div>
+        <p style="text-align:center;color:#aaa;font-size:11px;margin-top:20px">GiftKart Automated Notification • ${orderDate}</p>
+      </div>
+    </div>`,
+  }).then(() => {
+    console.log('📧 Email sent successfully!');
+  }).catch(err => {
+    console.error('❌ Email error:', err.message);
+  });
 
   // ── WhatsApp ───────────────────────────────────────────────────────────────
-  try {
-    await twilioClient.messages.create({
-      from: 'whatsapp:+14155238886',
-      to: 'whatsapp:+917889677109',
-      body: `🎁 *New GiftKart Order!*
-
-📋 *Order ID:* ${orderId}
-📅 *Date:* ${orderDate}
-
-📦 *Product:* ${productName}
-🔢 *Quantity:* ${quantity}
-💳 *Payment:* ${paymentMethod}
-💰 *Amount:* ₹${amount}
-✅ *Status:* CONFIRMED
-
-👤 *Customer:* ${name}
-📞 *Phone:* +91 ${phone}
-📍 *Address:* ${fullAddress}
-${paymentId ? `\n🔖 *Payment ID:* ${paymentId}` : ''}`,
-    });
-    console.log('📱 WhatsApp sent!');
-  } catch (e) {
-    console.error('❌ WhatsApp error:', e.message);
-  }
+  twilioClient.messages.create({
+    from: 'whatsapp:+14155238886',
+    to: 'whatsapp:+917889677109',
+    body: `🎁 *New GiftKart Order!*\n\n📋 *Order ID:* ${orderId}\n📅 *Date:* ${orderDate}\n\n📦 *Product:* ${productName}\n🔢 *Quantity:* ${quantity}\n💳 *Payment:* ${paymentMethod}\n💰 *Amount:* ₹${amount}\n✅ *Status:* CONFIRMED\n\n👤 *Customer:* ${name}\n📞 *Phone:* +91 ${phone}\n📍 *Address:* ${fullAddress}${paymentId ? `\n\n🔖 *Payment ID:* ${paymentId}` : ''}`,
+  }).then(() => {
+    console.log('📱 WhatsApp sent successfully!');
+  }).catch(err => {
+    console.error('❌ WhatsApp error:', err.message);
+  });
 }
 
 // ─── CREATE ORDER ─────────────────────────────────────────────────────────────
@@ -153,7 +120,7 @@ app.post('/create-order', async (req, res) => {
   }
 });
 
-// ─── VERIFY PAYMENT (Online) ──────────────────────────────────────────────────
+// ─── VERIFY PAYMENT + SEND NOTIFICATIONS ──────────────────────────────────────
 app.post('/verify-payment', async (req, res) => {
   try {
     const { payment_id, order_id, signature, product_name, amount, quantity, address } = req.body;
@@ -162,7 +129,7 @@ app.post('/verify-payment', async (req, res) => {
       return res.status(400).json({ error: 'Missing required fields' });
     }
 
-    // Verify signature
+    // Verify Razorpay signature
     const expected = crypto
       .createHmac('sha256', '443AtQ4Dsg9D1afcspfORkzn')
       .update(`${order_id}|${payment_id}`)
@@ -174,20 +141,22 @@ app.post('/verify-payment', async (req, res) => {
     }
 
     const orderId = `GK${Date.now()}`;
-    console.log(`✅ Payment verified: ${payment_id}`);
+    console.log(`✅ Payment verified: ${payment_id} → ${orderId}`);
 
-    // Respond immediately — don't wait for notifications
+    // ✅ Respond to app immediately — don't make app wait for email/WhatsApp
     res.json({ success: true, order_id: orderId, payment_id });
 
-    // Send notifications in background (non-blocking)
-    sendOrderNotifications({
-      orderId,
-      productName: product_name || 'GiftKart Product',
-      amount: amount || 0,
-      quantity: quantity || 1,
-      address: address || {},
-      paymentMethod: 'Online Payment (Razorpay)',
-      paymentId: payment_id,
+    // Send notifications in background after responding
+    setImmediate(() => {
+      sendNotifications({
+        orderId,
+        productName: product_name || 'GiftKart Product',
+        amount: amount || 0,
+        quantity: quantity || 1,
+        address: address || {},
+        paymentMethod: 'Online Payment (Razorpay)',
+        paymentId: payment_id,
+      });
     });
 
   } catch (error) {
@@ -196,34 +165,34 @@ app.post('/verify-payment', async (req, res) => {
   }
 });
 
-// ─── CASH ON DELIVERY ORDER ───────────────────────────────────────────────────
+// ─── CASH ON DELIVERY ─────────────────────────────────────────────────────────
 app.post('/cod-order', async (req, res) => {
   try {
     const { product_name, amount, quantity, address } = req.body;
-
-    if (!product_name || !amount || !address) {
+    if (!product_name || !amount) {
       return res.status(400).json({ error: 'Missing required fields' });
     }
-
     const orderId = `GK${Date.now()}`;
-    console.log(`📦 COD Order placed: ${orderId}`);
+    console.log(`📦 COD Order: ${orderId}`);
 
     // Respond immediately
     res.json({ success: true, order_id: orderId });
 
     // Send notifications in background
-    sendOrderNotifications({
-      orderId,
-      productName: product_name,
-      amount,
-      quantity: quantity || 1,
-      address,
-      paymentMethod: 'Cash on Delivery',
-      paymentId: null,
+    setImmediate(() => {
+      sendNotifications({
+        orderId,
+        productName: product_name,
+        amount,
+        quantity: quantity || 1,
+        address: address || {},
+        paymentMethod: 'Cash on Delivery',
+        paymentId: null,
+      });
     });
 
   } catch (error) {
-    console.error('❌ COD order error:', error);
+    console.error('❌ COD error:', error);
     res.status(500).json({ error: 'COD order error', details: error.message });
   }
 });
@@ -231,5 +200,7 @@ app.post('/cod-order', async (req, res) => {
 // ─── Start ────────────────────────────────────────────────────────────────────
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-  console.log(`🚀 GiftKart Server on port ${PORT}`);
+  console.log(`🚀 GiftKart Server v3 running on port ${PORT}`);
+  console.log(`   Email: malikaafan50@gmail.com`);
+  console.log(`   WhatsApp: +917889677109`);
 });
