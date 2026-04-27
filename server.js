@@ -6,7 +6,8 @@ const { Resend } = require('resend');
 const twilio = require('twilio');
 
 const app = express();
-app.use(express.json());
+// Increase payload limit for base64 photos
+app.use(express.json({ limit: '10mb' }));
 app.use(cors());
 
 // ─── Razorpay ─────────────────────────────────────────────────────────────────
@@ -15,10 +16,10 @@ const razorpay = new Razorpay({
   key_secret: '443AtQ4Dsg9D1afcspfORkzn',
 });
 
-// ─── Resend (Email) ───────────────────────────────────────────────────────────
+// ─── Resend ───────────────────────────────────────────────────────────────────
 const resend = new Resend('re_eeoXDsn6_KASEL31DoTF78LcAY33CfwDG');
 
-// ─── Twilio (WhatsApp) ────────────────────────────────────────────────────────
+// ─── Twilio ───────────────────────────────────────────────────────────────────
 const twilioClient = twilio(
   'AC0df2b98e0508cbdb83774ca207abcc79',
   '8dc831bd39ab6b3105b966e8ef2010d4'
@@ -26,11 +27,55 @@ const twilioClient = twilio(
 
 // ─── Health check ─────────────────────────────────────────────────────────────
 app.get('/', (req, res) => {
-  res.json({ status: 'GiftKart Server v4 ✅ — Resend email + WhatsApp' });
+  res.json({ status: 'GiftKart Server v5 ✅ — photos + email + WhatsApp' });
 });
 
-// ─── Send notifications in background ────────────────────────────────────────
-function sendNotifications({ orderId, productName, amount, quantity, address, paymentMethod, paymentId }) {
+// ─── Build custom details HTML ────────────────────────────────────────────────
+function buildCustomDetailsHtml(customDetails) {
+  if (!customDetails) return '';
+  const labels = {
+    customerName: 'Customer Name',
+    calligraphyText: 'Calligraphy Text',
+    designText: 'Design Text',
+    fontStyle: 'Font Style',
+    frameType: 'Frame Type',
+    cupColor: 'Cup Color',
+    size: 'Size',
+    specialNotes: 'Special Notes',
+  };
+  let html = '<hr style="margin:15px 0;border:none;border-top:1px solid #eee"><h3 style="color:#667eea;margin:10px 0">🎨 Customization Details</h3>';
+  for (const [key, label] of Object.entries(labels)) {
+    if (customDetails[key]) {
+      html += `<p><b style="color:#667eea">${label}:</b> ${customDetails[key]}</p>`;
+    }
+  }
+  return html;
+}
+
+// ─── Build custom details text for WhatsApp ───────────────────────────────────
+function buildCustomDetailsText(customDetails) {
+  if (!customDetails) return '';
+  const labels = {
+    customerName: 'Name on Frame/Cup',
+    calligraphyText: 'Calligraphy Text',
+    designText: 'Design Text',
+    fontStyle: 'Font Style',
+    frameType: 'Frame Type',
+    cupColor: 'Cup Color',
+    size: 'Size',
+    specialNotes: 'Special Notes',
+  };
+  let text = '\n\n🎨 *Customization:*';
+  for (const [key, label] of Object.entries(labels)) {
+    if (customDetails[key]) {
+      text += `\n${label}: ${customDetails[key]}`;
+    }
+  }
+  return text;
+}
+
+// ─── Send notifications ───────────────────────────────────────────────────────
+async function sendNotifications({ orderId, productName, amount, quantity, address, paymentMethod, paymentId, photoBase64, customDetails }) {
   const orderDate = new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' });
   const name = address?.name || 'Customer';
   const phone = address?.phone || 'N/A';
@@ -38,11 +83,32 @@ function sendNotifications({ orderId, productName, amount, quantity, address, pa
     ? `${address.house || ''}, ${address.area || ''}, ${address.city || ''} - ${address.pincode || ''}`
     : 'Not provided';
 
-  // ── Email via Resend ───────────────────────────────────────────────────────
+  const customHtml = buildCustomDetailsHtml(customDetails);
+  const customText = buildCustomDetailsText(customDetails);
+
+  // ── Photo attachment ──────────────────────────────────────────────────────
+  const attachments = [];
+  let photoHtml = '';
+  if (photoBase64) {
+    attachments.push({
+      filename: 'customer_photo.jpg',
+      content: photoBase64,
+    });
+    photoHtml = `
+      <div style="margin:16px 0;text-align:center">
+        <p style="color:#667eea;font-weight:bold;margin-bottom:8px">📸 Customer Photo:</p>
+        <img src="data:image/jpeg;base64,${photoBase64}" 
+             style="max-width:100%;max-height:400px;border-radius:10px;border:2px solid #eee" 
+             alt="Customer Photo"/>
+      </div>`;
+  }
+
+  // ── Email ──────────────────────────────────────────────────────────────────
   resend.emails.send({
     from: 'GiftKart Orders <onboarding@resend.dev>',
     to: 'malikaafan50@gmail.com',
     subject: `🎁 New Order - ${orderId} | ₹${amount} | ${productName}`,
+    attachments,
     html: `
     <div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto">
       <div style="background:linear-gradient(135deg,#667eea,#764ba2);color:white;padding:30px;text-align:center;border-radius:12px 12px 0 0">
@@ -58,7 +124,9 @@ function sendNotifications({ orderId, productName, amount, quantity, address, pa
           <p><b style="color:#667eea">Payment:</b> ${paymentMethod}</p>
           <p><b style="color:#667eea">Status:</b> <span style="background:#4CAF50;color:white;padding:2px 10px;border-radius:20px;font-size:12px">✅ CONFIRMED</span></p>
           ${paymentId ? `<p><b style="color:#667eea">Payment ID:</b> ${paymentId}</p>` : ''}
+          ${customHtml}
         </div>
+        ${photoHtml}
         <div style="font-size:28px;font-weight:800;color:#4CAF50;text-align:center;padding:16px 0">💰 ₹${amount}</div>
         <div style="background:white;padding:20px;border-radius:10px">
           <h2 style="color:#667eea;margin-top:0">📍 Delivery Address</h2>
@@ -75,11 +143,13 @@ function sendNotifications({ orderId, productName, amount, quantity, address, pa
     console.error('❌ Email error:', err.message);
   });
 
-  // ── WhatsApp via Twilio ────────────────────────────────────────────────────
+  // ── WhatsApp ───────────────────────────────────────────────────────────────
+  const waMessage = `🎁 *New GiftKart Order!*\n\n📋 *Order ID:* ${orderId}\n📅 *Date:* ${orderDate}\n\n📦 *Product:* ${productName}\n🔢 *Quantity:* ${quantity}\n💳 *Payment:* ${paymentMethod}\n💰 *Amount:* ₹${amount}\n✅ *Status:* CONFIRMED${customText}\n\n👤 *Customer:* ${name}\n📞 *Phone:* +91 ${phone}\n📍 *Address:* ${fullAddress}${paymentId ? `\n\n🔖 *Payment ID:* ${paymentId}` : ''}\n\n${photoBase64 ? '📸 Customer photo attached in email.' : ''}`;
+
   twilioClient.messages.create({
     from: 'whatsapp:+14155238886',
     to: 'whatsapp:+917889677109',
-    body: `🎁 *New GiftKart Order!*\n\n📋 *Order ID:* ${orderId}\n📅 *Date:* ${orderDate}\n\n📦 *Product:* ${productName}\n🔢 *Quantity:* ${quantity}\n💳 *Payment:* ${paymentMethod}\n💰 *Amount:* ₹${amount}\n✅ *Status:* CONFIRMED\n\n👤 *Customer:* ${name}\n📞 *Phone:* +91 ${phone}\n📍 *Address:* ${fullAddress}${paymentId ? `\n\n🔖 *Payment ID:* ${paymentId}` : ''}`,
+    body: waMessage,
   }).then(() => {
     console.log('📱 WhatsApp sent!');
   }).catch(err => {
@@ -114,10 +184,10 @@ app.post('/create-order', async (req, res) => {
   }
 });
 
-// ─── VERIFY PAYMENT + NOTIFY ──────────────────────────────────────────────────
+// ─── VERIFY PAYMENT ───────────────────────────────────────────────────────────
 app.post('/verify-payment', async (req, res) => {
   try {
-    const { payment_id, order_id, signature, product_name, amount, quantity, address } = req.body;
+    const { payment_id, order_id, signature, product_name, amount, quantity, address, photo_base64, custom_details } = req.body;
 
     if (!payment_id || !order_id || !signature) {
       return res.status(400).json({ error: 'Missing required fields' });
@@ -136,10 +206,10 @@ app.post('/verify-payment', async (req, res) => {
     const orderId = `GK${Date.now()}`;
     console.log(`✅ Payment verified: ${payment_id} → ${orderId}`);
 
-    // Respond to app immediately
+    // Respond immediately
     res.json({ success: true, order_id: orderId, payment_id });
 
-    // Send notifications in background
+    // Send in background
     setImmediate(() => {
       sendNotifications({
         orderId,
@@ -149,6 +219,8 @@ app.post('/verify-payment', async (req, res) => {
         address: address || {},
         paymentMethod: 'Online Payment (Razorpay)',
         paymentId: payment_id,
+        photoBase64: photo_base64 || null,
+        customDetails: custom_details || null,
       });
     });
 
@@ -161,7 +233,7 @@ app.post('/verify-payment', async (req, res) => {
 // ─── CASH ON DELIVERY ─────────────────────────────────────────────────────────
 app.post('/cod-order', async (req, res) => {
   try {
-    const { product_name, amount, quantity, address } = req.body;
+    const { product_name, amount, quantity, address, photo_base64, custom_details } = req.body;
     if (!product_name || !amount) {
       return res.status(400).json({ error: 'Missing required fields' });
     }
@@ -179,6 +251,8 @@ app.post('/cod-order', async (req, res) => {
         address: address || {},
         paymentMethod: 'Cash on Delivery',
         paymentId: null,
+        photoBase64: photo_base64 || null,
+        customDetails: custom_details || null,
       });
     });
 
@@ -191,7 +265,5 @@ app.post('/cod-order', async (req, res) => {
 // ─── Start ────────────────────────────────────────────────────────────────────
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-  console.log(`🚀 GiftKart Server v4 on port ${PORT}`);
-  console.log(`   📧 Email: Resend → malikaafan50@gmail.com`);
-  console.log(`   📱 WhatsApp: Twilio → +917889677109`);
+  console.log(`🚀 GiftKart Server v5 on port ${PORT}`);
 });
