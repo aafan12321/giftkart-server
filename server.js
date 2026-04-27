@@ -22,7 +22,7 @@ const resend = new Resend('re_eeoXDsn6_KASEL31DoTF78LcAY33CfwDG');
 // ─── Twilio ───────────────────────────────────────────────────────────────────
 const twilioClient = twilio(
   'AC0df2b98e0508cbdb83774ca207abcc79',
-  '8dc831bd39ab6b3105b966e8ef2010d4'
+  '441d5499700775b1a5ea7b5fe08a8d33'
 );
 
 // ─── Health check ─────────────────────────────────────────────────────────────
