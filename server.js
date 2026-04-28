@@ -18,7 +18,7 @@ const resend = new Resend('re_eeoXDsn6_KASEL31DoTF78LcAY33CfwDG');
 
 const twilioClient = twilio(
   'AC0df2b98e0508cbdb83774ca207abcc79',
-  '441d5499700775b1a5ea7b5fe08a8d33'
+  '8b9fcab9add9923a3adf370771f5d278'
 );
 
 app.get('/', (req, res) => {
