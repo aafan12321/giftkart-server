@@ -21,9 +21,9 @@ const resend = new Resend('re_eeoXDsn6_KASEL31DoTF78LcAY33CfwDG');
 // ─── Twilio ───────────────────────────────────────────────────────────────────
 const twilioClient = twilio(
   'AC0df2b98e0508cbdb83774ca207abcc79',
-  'babc00a87e09d5b808fbd7fcb66a921a'  // ✅ updated auth token
+  'e4d03b75c0c10dcbba2d460cdc20bf5e'  // ✅ latest auth token — do NOT click Show again
 );
-const TWILIO_VERIFY_SERVICE_SID = 'VAad39fedfeef93b30ddba9f7cc397db44';
+const TWILIO_VERIFY_SERVICE_SID = 'VAad39fedfeef93b30ddba9f7cc397db44'; // ✅ correct service SID
 
 // ─── Health check ─────────────────────────────────────────────────────────────
 app.get('/', (req, res) => {
