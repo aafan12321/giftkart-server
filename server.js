@@ -21,7 +21,7 @@ const resend = new Resend('re_eeoXDsn6_KASEL31DoTF78LcAY33CfwDG');
 // ─── Twilio ───────────────────────────────────────────────────────────────────
 const twilioClient = twilio(
   'AC0df2b98e0508cbdb83774ca207abcc79',
-  '8b9fcab9add9923a3adf370771f5d278'
+  'babc00a87e09d5b808fbd7fcb66a921a'  // ✅ updated auth token
 );
 const TWILIO_VERIFY_SERVICE_SID = 'VA058ceb4ac692b65941eabd2e308b8989';
 
