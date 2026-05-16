@@ -23,7 +23,7 @@ const twilioClient = twilio(
   'AC0df2b98e0508cbdb83774ca207abcc79',
   'babc00a87e09d5b808fbd7fcb66a921a'  // ✅ updated auth token
 );
-const TWILIO_VERIFY_SERVICE_SID = 'VA058ceb4ac692b65941eabd2e308b8989';
+const TWILIO_VERIFY_SERVICE_SID = 'VAad39fedfeef93b30ddba9f7cc397db44';
 
 // ─── Health check ─────────────────────────────────────────────────────────────
 app.get('/', (req, res) => {
