@@ -3,7 +3,7 @@ const Razorpay = require('razorpay');
 const crypto = require('crypto');
 const cors = require('cors');
 const { Resend } = require('resend');
-const twilio = require('twilio');
+const fetch = (...args) => import('node-fetch').then(({ default: f }) => f(...args));
 
 const app = express();
 app.use(express.json({ limit: '10mb' }));
@@ -18,16 +18,22 @@ const razorpay = new Razorpay({
 // ─── Resend ───────────────────────────────────────────────────────────────────
 const resend = new Resend('re_eeoXDsn6_KASEL31DoTF78LcAY33CfwDG');
 
-// ─── Twilio ───────────────────────────────────────────────────────────────────
-const twilioClient = twilio(
-  'AC0df2b98e0508cbdb83774ca207abcc79',
-  'e4d03b75c0c10dcbba2d460cdc20bf5e'  // ✅ latest auth token — do NOT click Show again
-);
-const TWILIO_VERIFY_SERVICE_SID = 'VAad39fedfeef93b30ddba9f7cc397db44'; // ✅ correct service SID
+// ─── MSG91 Config ─────────────────────────────────────────────────────────────
+const MSG91_AUTH_KEY   = '518159Ahc2alc7V6a0cac25P1';
+const MSG91_TEMPLATE_ID = '6a0cae1c04c4e4256407e123';
+const MSG91_SENDER_ID  = 'GFTKRT';
+
+// ─── In-memory OTP store (phone → { otp, expiresAt }) ────────────────────────
+// Simple store — works fine for low traffic. No extra package needed.
+const otpStore = new Map();
+
+function generateOtp() {
+  return Math.floor(100000 + Math.random() * 900000).toString();
+}
 
 // ─── Health check ─────────────────────────────────────────────────────────────
 app.get('/', (req, res) => {
-  res.json({ status: 'GiftKart Server v7 ✅ — OTP + payments + notifications' });
+  res.json({ status: 'GiftKart Server v8 ✅ — MSG91 OTP + payments + notifications' });
 });
 
 // ─── SEND OTP ─────────────────────────────────────────────────────────────────
@@ -36,17 +42,41 @@ app.post('/send-otp', async (req, res) => {
     const { phone } = req.body;
     if (!phone) return res.status(400).json({ error: 'Phone number required' });
 
-    const formattedPhone = phone.startsWith('+') ? phone : `+91${phone}`;
+    // Strip +91 prefix if present — MSG91 needs 10-digit number for India
+    const cleanPhone = phone.replace(/^\+91/, '').replace(/\D/g, '');
+    if (cleanPhone.length !== 10) {
+      return res.status(400).json({ error: 'Invalid phone number' });
+    }
 
-    const verification = await twilioClient.verify.v2
-      .services(TWILIO_VERIFY_SERVICE_SID)
-      .verifications.create({
-        to: formattedPhone,
-        channel: 'sms',
-      });
+    const otp = generateOtp();
+    const expiresAt = Date.now() + 10 * 60 * 1000; // 10 minutes
+    otpStore.set(cleanPhone, { otp, expiresAt });
 
-    console.log(`📱 OTP sent to ${formattedPhone}: ${verification.status}`);
-    res.json({ success: true, status: verification.status });
+    // MSG91 Send OTP API
+    const response = await fetch('https://control.msg91.com/api/v5/otp', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'authkey': MSG91_AUTH_KEY,
+      },
+      body: JSON.stringify({
+        template_id: MSG91_TEMPLATE_ID,
+        mobile: `91${cleanPhone}`,
+        authkey: MSG91_AUTH_KEY,
+        otp: otp,
+        sender: MSG91_SENDER_ID,
+      }),
+    });
+
+    const data = await response.json();
+    console.log(`📱 MSG91 send OTP to ${cleanPhone}:`, JSON.stringify(data));
+
+    if (data.type === 'success' || response.ok) {
+      res.json({ success: true, status: 'OTP sent' });
+    } else {
+      console.error('❌ MSG91 error:', data);
+      res.status(500).json({ error: 'Failed to send OTP', details: data.message || JSON.stringify(data) });
+    }
   } catch (error) {
     console.error('❌ Send OTP error:', error.message);
     res.status(500).json({ error: 'Failed to send OTP', details: error.message });
@@ -59,22 +89,26 @@ app.post('/verify-otp', async (req, res) => {
     const { phone, code } = req.body;
     if (!phone || !code) return res.status(400).json({ error: 'Phone and code required' });
 
-    const formattedPhone = phone.startsWith('+') ? phone : `+91${phone}`;
+    const cleanPhone = phone.replace(/^\+91/, '').replace(/\D/g, '');
+    const record = otpStore.get(cleanPhone);
 
-    const check = await twilioClient.verify.v2
-      .services(TWILIO_VERIFY_SERVICE_SID)
-      .verificationChecks.create({
-        to: formattedPhone,
-        code,
-      });
-
-    console.log(`✅ OTP verified for ${formattedPhone}: ${check.status}`);
-
-    if (check.status === 'approved') {
-      res.json({ success: true, status: 'approved' });
-    } else {
-      res.json({ success: false, status: check.status });
+    if (!record) {
+      return res.json({ success: false, status: 'OTP not found. Please request a new one.' });
     }
+
+    if (Date.now() > record.expiresAt) {
+      otpStore.delete(cleanPhone);
+      return res.json({ success: false, status: 'OTP expired. Please request a new one.' });
+    }
+
+    if (record.otp !== code.toString()) {
+      return res.json({ success: false, status: 'Invalid OTP' });
+    }
+
+    // OTP matched — delete it so it can't be reused
+    otpStore.delete(cleanPhone);
+    console.log(`✅ OTP verified for ${cleanPhone}`);
+    res.json({ success: true, status: 'approved' });
   } catch (error) {
     console.error('❌ Verify OTP error:', error.message);
     res.status(500).json({ error: 'Failed to verify OTP', details: error.message });
@@ -109,11 +143,13 @@ function buildCustomText(customDetails) {
   return text;
 }
 
-function sendNotifications({ orderId, productName, amount, quantity, address, paymentMethod, paymentId, photoBase64, customDetails }) {
+async function sendNotifications({ orderId, productName, amount, quantity, address, paymentMethod, paymentId, photoBase64, customDetails }) {
   const orderDate = new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' });
   const name = address?.name || 'Customer';
   const phone = address?.phone || 'N/A';
-  const fullAddress = address ? `${address.house || ''}, ${address.area || ''}, ${address.city || ''} - ${address.pincode || ''}` : 'Not provided';
+  const fullAddress = address
+    ? `${address.house || ''}, ${address.area || ''}, ${address.city || ''} - ${address.pincode || ''}`
+    : 'Not provided';
 
   const attachments = [];
   let photoHtml = '';
@@ -122,6 +158,7 @@ function sendNotifications({ orderId, productName, amount, quantity, address, pa
     photoHtml = `<div style="margin:16px 0;text-align:center"><p style="color:#667eea;font-weight:bold">📸 Customer Photo:</p><img src="data:image/jpeg;base64,${photoBase64}" style="max-width:100%;max-height:400px;border-radius:10px"/></div>`;
   }
 
+  // ── Email via Resend ────────────────────────────────────────────────────────
   resend.emails.send({
     from: 'GiftKart Orders <onboarding@resend.dev>',
     to: 'malikaafan50@gmail.com',
@@ -156,18 +193,35 @@ function sendNotifications({ orderId, productName, amount, quantity, address, pa
     </div>`,
   }).then(() => console.log('📧 Email sent!')).catch(err => console.error('❌ Email error:', err.message));
 
-  twilioClient.messages.create({
-    from: 'whatsapp:+14155238886',
-    to: 'whatsapp:+917889677109',
-    body: `🎁 *New GiftKart Order!*\n\n📋 *Order ID:* ${orderId}\n📅 *Date:* ${orderDate}\n\n📦 *Product:* ${productName}\n🔢 *Quantity:* ${quantity}\n💳 *Payment:* ${paymentMethod}\n💰 *Amount:* ₹${amount}\n✅ CONFIRMED${buildCustomText(customDetails)}\n\n👤 *Customer:* ${name}\n📞 *Phone:* +91 ${phone}\n📍 *Address:* ${fullAddress}${paymentId ? `\n\n🔖 *Payment ID:* ${paymentId}` : ''}${photoBase64 ? '\n\n📸 Photo in email.' : ''}`,
-  }).then(() => console.log('📱 WhatsApp sent!')).catch(err => console.error('❌ WhatsApp error:', err.message));
+  // ── WhatsApp via MSG91 ──────────────────────────────────────────────────────
+  const waBody = `🎁 *New GiftKart Order!*\n\n📋 *Order ID:* ${orderId}\n📅 *Date:* ${orderDate}\n\n📦 *Product:* ${productName}\n🔢 *Quantity:* ${quantity}\n💳 *Payment:* ${paymentMethod}\n💰 *Amount:* ₹${amount}\n✅ CONFIRMED${buildCustomText(customDetails)}\n\n👤 *Customer:* ${name}\n📞 *Phone:* +91 ${phone}\n📍 *Address:* ${fullAddress}${paymentId ? `\n\n🔖 *Payment ID:* ${paymentId}` : ''}${photoBase64 ? '\n\n📸 Photo in email.' : ''}`;
+
+  fetch('https://control.msg91.com/api/v5/whatsapp/whatsapp-outbound-message/bulk/', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'authkey': MSG91_AUTH_KEY,
+    },
+    body: JSON.stringify({
+      integrated_number: '917889677109',
+      content_type: 'template',
+      payload: {
+        to: '917889677109',
+        type: 'text',
+        text: { body: waBody },
+      },
+    }),
+  }).then(r => r.json())
+    .then(d => console.log('📱 WhatsApp sent:', JSON.stringify(d)))
+    .catch(err => console.error('❌ WhatsApp error:', err.message));
 }
 
 // ─── CREATE ORDER ─────────────────────────────────────────────────────────────
 app.post('/create-order', async (req, res) => {
   try {
     const { amount, product_name, currency = 'INR' } = req.body;
-    if (!amount || typeof amount !== 'number' || amount < 100) return res.status(400).json({ error: 'Invalid amount.' });
+    if (!amount || typeof amount !== 'number' || amount < 100)
+      return res.status(400).json({ error: 'Invalid amount.' });
     const order = await razorpay.orders.create({
       amount: Math.round(amount), currency,
       receipt: `receipt_${Date.now()}`,
@@ -185,13 +239,23 @@ app.post('/create-order', async (req, res) => {
 app.post('/verify-payment', async (req, res) => {
   try {
     const { payment_id, order_id, signature, product_name, amount, quantity, address, photo_base64, custom_details } = req.body;
-    if (!payment_id || !order_id || !signature) return res.status(400).json({ error: 'Missing required fields' });
-    const expected = crypto.createHmac('sha256', '443AtQ4Dsg9D1afcspfORkzn').update(`${order_id}|${payment_id}`).digest('hex');
-    if (expected !== signature) { console.warn(`❌ Signature mismatch`); return res.status(400).json({ success: false, error: 'Payment verification failed.' }); }
+    if (!payment_id || !order_id || !signature)
+      return res.status(400).json({ error: 'Missing required fields' });
+    const expected = crypto.createHmac('sha256', '443AtQ4Dsg9D1afcspfORkzn')
+      .update(`${order_id}|${payment_id}`).digest('hex');
+    if (expected !== signature) {
+      console.warn('❌ Signature mismatch');
+      return res.status(400).json({ success: false, error: 'Payment verification failed.' });
+    }
     const orderId = `GK${Date.now()}`;
     console.log(`✅ Payment verified: ${payment_id} → ${orderId}`);
     res.json({ success: true, order_id: orderId, payment_id });
-    setImmediate(() => sendNotifications({ orderId, productName: product_name || 'GiftKart Product', amount: amount || 0, quantity: quantity || 1, address: address || {}, paymentMethod: 'Online Payment (Razorpay)', paymentId: payment_id, photoBase64: photo_base64 || null, customDetails: custom_details || null }));
+    setImmediate(() => sendNotifications({
+      orderId, productName: product_name || 'GiftKart Product',
+      amount: amount || 0, quantity: quantity || 1, address: address || {},
+      paymentMethod: 'Online Payment (Razorpay)', paymentId: payment_id,
+      photoBase64: photo_base64 || null, customDetails: custom_details || null,
+    }));
   } catch (error) {
     console.error('❌ Verify error:', error);
     res.status(500).json({ error: 'Verification error', details: error.message });
@@ -202,11 +266,16 @@ app.post('/verify-payment', async (req, res) => {
 app.post('/cod-order', async (req, res) => {
   try {
     const { product_name, amount, quantity, address, photo_base64, custom_details } = req.body;
-    if (!product_name || !amount) return res.status(400).json({ error: 'Missing required fields' });
+    if (!product_name || !amount)
+      return res.status(400).json({ error: 'Missing required fields' });
     const orderId = `GK${Date.now()}`;
     console.log(`📦 COD Order: ${orderId}`);
     res.json({ success: true, order_id: orderId });
-    setImmediate(() => sendNotifications({ orderId, productName: product_name, amount, quantity: quantity || 1, address: address || {}, paymentMethod: 'Cash on Delivery', paymentId: null, photoBase64: photo_base64 || null, customDetails: custom_details || null }));
+    setImmediate(() => sendNotifications({
+      orderId, productName: product_name, amount, quantity: quantity || 1,
+      address: address || {}, paymentMethod: 'Cash on Delivery', paymentId: null,
+      photoBase64: photo_base64 || null, customDetails: custom_details || null,
+    }));
   } catch (error) {
     console.error('❌ COD error:', error);
     res.status(500).json({ error: 'COD order error', details: error.message });
@@ -214,4 +283,4 @@ app.post('/cod-order', async (req, res) => {
 });
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`🚀 GiftKart Server v7 on port ${PORT}`));
+app.listen(PORT, () => console.log(`🚀 GiftKart Server v8 on port ${PORT}`));
