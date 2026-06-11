@@ -1,3 +1,4 @@
+cat > /home/claude/server.js << 'EOF'
 const express = require('express');
 const Razorpay = require('razorpay');
 const crypto = require('crypto');
@@ -19,12 +20,11 @@ const razorpay = new Razorpay({
 const resend = new Resend('re_eeoXDsn6_KASEL31DoTF78LcAY33CfwDG');
 
 // ─── MSG91 Config ─────────────────────────────────────────────────────────────
-const MSG91_AUTH_KEY   = '518159Ahc2alc7V6a0cac25P1';
+const MSG91_AUTH_KEY    = '518159Ahc2alc7V6a0cac25P1';
 const MSG91_TEMPLATE_ID = '6a0cae1c04c4e4256407e123';
-const MSG91_SENDER_ID  = 'GFTKRT';
+const MSG91_SENDER_ID   = 'GFTKRT';
 
 // ─── In-memory OTP store (phone → { otp, expiresAt }) ────────────────────────
-// Simple store — works fine for low traffic. No extra package needed.
 const otpStore = new Map();
 
 function generateOtp() {
@@ -33,7 +33,7 @@ function generateOtp() {
 
 // ─── Health check ─────────────────────────────────────────────────────────────
 app.get('/', (req, res) => {
-  res.json({ status: 'GiftKart Server v8 ✅ — MSG91 OTP + payments + notifications' });
+  res.json({ status: 'GiftKart Server v8 ✅ — MSG91 OTP + payments + notifications + cancellations' });
 });
 
 // ─── SEND OTP ─────────────────────────────────────────────────────────────────
@@ -42,28 +42,22 @@ app.post('/send-otp', async (req, res) => {
     const { phone } = req.body;
     if (!phone) return res.status(400).json({ error: 'Phone number required' });
 
-    // Strip +91 prefix if present — MSG91 needs 10-digit number for India
     const cleanPhone = phone.replace(/^\+91/, '').replace(/\D/g, '');
-    if (cleanPhone.length !== 10) {
+    if (cleanPhone.length !== 10)
       return res.status(400).json({ error: 'Invalid phone number' });
-    }
 
     const otp = generateOtp();
-    const expiresAt = Date.now() + 10 * 60 * 1000; // 10 minutes
+    const expiresAt = Date.now() + 10 * 60 * 1000;
     otpStore.set(cleanPhone, { otp, expiresAt });
 
-    // MSG91 Send OTP API
     const response = await fetch('https://control.msg91.com/api/v5/otp', {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'authkey': MSG91_AUTH_KEY,
-      },
+      headers: { 'Content-Type': 'application/json', 'authkey': MSG91_AUTH_KEY },
       body: JSON.stringify({
         template_id: MSG91_TEMPLATE_ID,
         mobile: `91${cleanPhone}`,
         authkey: MSG91_AUTH_KEY,
-        otp: otp,
+        otp,
         sender: MSG91_SENDER_ID,
       }),
     });
@@ -92,20 +86,17 @@ app.post('/verify-otp', async (req, res) => {
     const cleanPhone = phone.replace(/^\+91/, '').replace(/\D/g, '');
     const record = otpStore.get(cleanPhone);
 
-    if (!record) {
+    if (!record)
       return res.json({ success: false, status: 'OTP not found. Please request a new one.' });
-    }
 
     if (Date.now() > record.expiresAt) {
       otpStore.delete(cleanPhone);
       return res.json({ success: false, status: 'OTP expired. Please request a new one.' });
     }
 
-    if (record.otp !== code.toString()) {
+    if (record.otp !== code.toString())
       return res.json({ success: false, status: 'Invalid OTP' });
-    }
 
-    // OTP matched — delete it so it can't be reused
     otpStore.delete(cleanPhone);
     console.log(`✅ OTP verified for ${cleanPhone}`);
     res.json({ success: true, status: 'approved' });
@@ -143,6 +134,7 @@ function buildCustomText(customDetails) {
   return text;
 }
 
+// ─── Order notifications (new order) ─────────────────────────────────────────
 async function sendNotifications({ orderId, productName, amount, quantity, address, paymentMethod, paymentId, photoBase64, customDetails }) {
   const orderDate = new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' });
   const name = address?.name || 'Customer';
@@ -158,7 +150,7 @@ async function sendNotifications({ orderId, productName, amount, quantity, addre
     photoHtml = `<div style="margin:16px 0;text-align:center"><p style="color:#667eea;font-weight:bold">📸 Customer Photo:</p><img src="data:image/jpeg;base64,${photoBase64}" style="max-width:100%;max-height:400px;border-radius:10px"/></div>`;
   }
 
-  // ── Email via Resend ────────────────────────────────────────────────────────
+  // Email
   resend.emails.send({
     from: 'GiftKart Orders <onboarding@resend.dev>',
     to: 'malikaafan50@gmail.com',
@@ -191,29 +183,115 @@ async function sendNotifications({ orderId, productName, amount, quantity, addre
         <p style="text-align:center;color:#aaa;font-size:11px;margin-top:20px">GiftKart • ${orderDate}</p>
       </div>
     </div>`,
-  }).then(() => console.log('📧 Email sent!')).catch(err => console.error('❌ Email error:', err.message));
+  }).then(() => console.log('📧 Order email sent!'))
+    .catch(err => console.error('❌ Email error:', err.message));
 
-  // ── WhatsApp via MSG91 ──────────────────────────────────────────────────────
+  // WhatsApp
   const waBody = `🎁 *New GiftKart Order!*\n\n📋 *Order ID:* ${orderId}\n📅 *Date:* ${orderDate}\n\n📦 *Product:* ${productName}\n🔢 *Quantity:* ${quantity}\n💳 *Payment:* ${paymentMethod}\n💰 *Amount:* ₹${amount}\n✅ CONFIRMED${buildCustomText(customDetails)}\n\n👤 *Customer:* ${name}\n📞 *Phone:* +91 ${phone}\n📍 *Address:* ${fullAddress}${paymentId ? `\n\n🔖 *Payment ID:* ${paymentId}` : ''}${photoBase64 ? '\n\n📸 Photo in email.' : ''}`;
 
   fetch('https://control.msg91.com/api/v5/whatsapp/whatsapp-outbound-message/bulk/', {
     method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'authkey': MSG91_AUTH_KEY,
-    },
+    headers: { 'Content-Type': 'application/json', 'authkey': MSG91_AUTH_KEY },
     body: JSON.stringify({
       integrated_number: '917889677109',
       content_type: 'template',
-      payload: {
-        to: '917889677109',
-        type: 'text',
-        text: { body: waBody },
-      },
+      payload: { to: '917889677109', type: 'text', text: { body: waBody } },
     }),
   }).then(r => r.json())
     .then(d => console.log('📱 WhatsApp sent:', JSON.stringify(d)))
     .catch(err => console.error('❌ WhatsApp error:', err.message));
+}
+
+// ─── Cancellation notifications ───────────────────────────────────────────────
+async function sendCancellationNotifications({ orderId, productName, amount, quantity, address, paymentMethod, orderDate }) {
+  const requestedAt = new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' });
+  const name        = address?.name    || 'Customer';
+  const phone       = address?.phone   || 'N/A';
+  const fullAddress = address
+    ? `${address.house || ''}, ${address.area || ''}, ${address.city || ''} - ${address.pincode || ''}`
+    : 'Not provided';
+
+  // ── Email via Resend ────────────────────────────────────────────────────────
+  resend.emails.send({
+    from: 'GiftKart Orders <onboarding@resend.dev>',
+    to: 'malikaafan50@gmail.com',
+    subject: `🚫 Cancellation Request — ${orderId} | ${productName}`,
+    html: `<div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto">
+
+      <!-- Header -->
+      <div style="background:linear-gradient(135deg,#e53935,#c62828);color:white;padding:30px;text-align:center;border-radius:12px 12px 0 0">
+        <h1 style="margin:0;font-size:28px">🚫 Cancellation Request</h1>
+        <p style="margin:8px 0 0;font-size:16px">Order ID: <strong>${orderId}</strong></p>
+        <p style="margin:4px 0 0;font-size:12px;opacity:0.85">Requested at: ${requestedAt}</p>
+      </div>
+
+      <div style="background:#f9f9f9;padding:24px;border-radius:0 0 12px 12px">
+
+        <!-- Alert banner -->
+        <div style="background:#fff3e0;border-left:4px solid #FF9800;padding:14px 18px;border-radius:8px;margin-bottom:20px">
+          <p style="margin:0;color:#e65100;font-weight:bold;font-size:14px">
+            ⚠️ A customer has requested cancellation. Please review and take action within 24 hours.
+          </p>
+        </div>
+
+        <!-- Order Details -->
+        <div style="background:white;padding:20px;border-radius:10px;margin-bottom:16px">
+          <h2 style="color:#e53935;margin-top:0">📦 Order Details</h2>
+          <table style="width:100%;border-collapse:collapse">
+            <tr><td style="padding:6px 0;color:#888;width:140px">Product</td><td style="padding:6px 0;font-weight:bold">${productName}</td></tr>
+            <tr><td style="padding:6px 0;color:#888">Quantity</td><td style="padding:6px 0;font-weight:bold">${quantity}</td></tr>
+            <tr><td style="padding:6px 0;color:#888">Amount</td><td style="padding:6px 0;font-weight:bold;color:#e53935;font-size:18px">₹${amount}</td></tr>
+            <tr><td style="padding:6px 0;color:#888">Payment</td><td style="padding:6px 0;font-weight:bold">${paymentMethod}</td></tr>
+            <tr><td style="padding:6px 0;color:#888">Order Date</td><td style="padding:6px 0;font-weight:bold">${orderDate}</td></tr>
+            <tr><td style="padding:6px 0;color:#888">Status</td><td style="padding:6px 0"><span style="background:#FF9800;color:white;padding:3px 12px;border-radius:20px;font-size:12px;font-weight:bold">🕐 CANCELLATION REQUESTED</span></td></tr>
+          </table>
+        </div>
+
+        <!-- Delivery Address -->
+        <div style="background:white;padding:20px;border-radius:10px">
+          <h2 style="color:#e53935;margin-top:0">📍 Delivery Address</h2>
+          <table style="width:100%;border-collapse:collapse">
+            <tr><td style="padding:6px 0;color:#888;width:140px">Name</td><td style="padding:6px 0;font-weight:bold">${name}</td></tr>
+            <tr><td style="padding:6px 0;color:#888">Phone</td><td style="padding:6px 0;font-weight:bold">+91 ${phone}</td></tr>
+            <tr><td style="padding:6px 0;color:#888">Address</td><td style="padding:6px 0;font-weight:bold">${fullAddress}</td></tr>
+          </table>
+        </div>
+
+        <p style="text-align:center;color:#aaa;font-size:11px;margin-top:20px">
+          GiftKart • ${requestedAt}
+        </p>
+      </div>
+    </div>`,
+  }).then(() => console.log('📧 Cancellation email sent!'))
+    .catch(err => console.error('❌ Cancellation email error:', err.message));
+
+  // ── WhatsApp via MSG91 ──────────────────────────────────────────────────────
+  const waBody =
+    `🚫 *Cancellation Request — GiftKart*\n\n` +
+    `📋 *Order ID:* ${orderId}\n` +
+    `⏰ *Requested:* ${requestedAt}\n\n` +
+    `📦 *Product:* ${productName}\n` +
+    `🔢 *Quantity:* ${quantity}\n` +
+    `💰 *Amount:* ₹${amount}\n` +
+    `💳 *Payment:* ${paymentMethod}\n` +
+    `📅 *Order Date:* ${orderDate}\n` +
+    `🕐 *Status:* CANCELLATION REQUESTED\n\n` +
+    `👤 *Customer:* ${name}\n` +
+    `📞 *Phone:* +91 ${phone}\n` +
+    `📍 *Address:* ${fullAddress}\n\n` +
+    `⚠️ Please review and process this cancellation within 24 hours.`;
+
+  fetch('https://control.msg91.com/api/v5/whatsapp/whatsapp-outbound-message/bulk/', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'authkey': MSG91_AUTH_KEY },
+    body: JSON.stringify({
+      integrated_number: '917889677109',
+      content_type: 'template',
+      payload: { to: '917889677109', type: 'text', text: { body: waBody } },
+    }),
+  }).then(r => r.json())
+    .then(d => console.log('📱 Cancellation WhatsApp sent:', JSON.stringify(d)))
+    .catch(err => console.error('❌ Cancellation WhatsApp error:', err.message));
 }
 
 // ─── CREATE ORDER ─────────────────────────────────────────────────────────────
@@ -282,5 +360,36 @@ app.post('/cod-order', async (req, res) => {
   }
 });
 
+// ─── CANCEL ORDER ─────────────────────────────────────────────────────────────
+app.post('/cancel-order', async (req, res) => {
+  try {
+    const { order_id, product_name, amount, quantity, payment_method, order_date, address } = req.body;
+
+    if (!order_id || !product_name)
+      return res.status(400).json({ error: 'Missing required fields' });
+
+    console.log(`🚫 Cancellation request: ${order_id} — ${product_name}`);
+
+    // Respond immediately so the app doesn't wait
+    res.json({ success: true, order_id });
+
+    // Send email + WhatsApp in background
+    setImmediate(() => sendCancellationNotifications({
+      orderId:       order_id,
+      productName:   product_name,
+      amount:        amount        || 0,
+      quantity:      quantity      || 1,
+      paymentMethod: payment_method || 'N/A',
+      orderDate:     order_date    || 'N/A',
+      address:       address       || {},
+    }));
+  } catch (error) {
+    console.error('❌ Cancel order error:', error);
+    res.status(500).json({ error: 'Cancellation error', details: error.message });
+  }
+});
+
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log(`🚀 GiftKart Server v8 on port ${PORT}`));
+EOF
+echo "Done"
