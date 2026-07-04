@@ -50,10 +50,37 @@ function buildCustomHtml(customDetails) {
   return html;
 }
 
+// Coerce anything into a safe number instead of letting NaN/undefined reach
+// the email/Firestore. Never throws.
+function safeNum(value, fallback = 0) {
+  const n = typeof value === 'string' ? parseFloat(value) : value;
+  return typeof n === 'number' && !Number.isNaN(n) ? n : fallback;
+}
+
+// Builds the itemized "one block per product" HTML used when an order
+// contains a `products` array (multi-item cart checkout), instead of the
+// single merged "N items from GiftKart" line.
+function buildProductsHtml(products) {
+  return products.map((p) => {
+    const name     = p?.name || 'Product';
+    const price    = safeNum(p?.price, 0);
+    const quantity = safeNum(p?.quantity, 1);
+    const subtotal = safeNum(p?.subtotal, price * quantity);
+    return `
+      <div style="border-bottom:1px solid #eee;padding:15px 0">
+        <p><b>Product:</b> ${name}</p>
+        <p><b>Quantity:</b> ${quantity}</p>
+        <p><b>Unit Price:</b> ₹${price}</p>
+        <p><b>Subtotal:</b> ₹${subtotal}</p>
+        ${buildCustomHtml(p?.details || p?.customDetails)}
+      </div>`;
+  }).join('');
+}
+
 async function sendNotifications({
   orderId, productName, amount, quantity,
   address, paymentMethod, paymentId,
-  photoBase64, customDetails,
+  photoBase64, customDetails, products,
 }) {
   const orderDate   = new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' });
   const name        = address?.name  || 'Customer';
@@ -69,11 +96,21 @@ async function sendNotifications({
     photoHtml = `<div style="text-align:center"><img src="data:image/jpeg;base64,${photoBase64}" style="max-width:100%;max-height:400px;border-radius:10px"/></div>`;
   }
 
+  // Multi-product orders: list every product individually instead of a
+  // single merged line. Falls back to the legacy single-product block when
+  // no `products` array was sent (older app builds, single-item checkout).
+  const hasProducts = Array.isArray(products) && products.length > 0;
+  const productsBlockHtml = hasProducts
+    ? `<p><b>${products.length} item${products.length === 1 ? '' : 's'} in this order:</b></p>${buildProductsHtml(products)}`
+    : `<p><b>Product:</b> ${productName}</p>
+       <p><b>Quantity:</b> ${quantity}</p>
+       ${buildCustomHtml(customDetails)}`;
+
   try {
     await resend.emails.send({
       from:        FROM_EMAIL,
       to:          NOTIFY_EMAIL,
-      subject:     `🎁 New Order - ${orderId} | ₹${amount} | ${productName}`,
+      subject:     `🎁 New Order - ${orderId} | ₹${amount} | ${hasProducts ? `${products.length} items` : productName}`,
       attachments,
       html: `<div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto">
         <div style="background:linear-gradient(135deg,#667eea,#764ba2);color:white;padding:30px;text-align:center;border-radius:12px 12px 0 0">
@@ -82,13 +119,11 @@ async function sendNotifications({
           <p>${orderDate}</p>
         </div>
         <div style="background:#f9f9f9;padding:24px">
-          <p><b>Product:</b> ${productName}</p>
-          <p><b>Quantity:</b> ${quantity}</p>
+          ${productsBlockHtml}
           <p><b>Payment:</b> ${paymentMethod}</p>
           ${paymentId ? `<p><b>Payment ID:</b> ${paymentId}</p>` : ''}
-          ${buildCustomHtml(customDetails)}
           ${photoHtml}
-          <p style="font-size:24px;color:#4CAF50;text-align:center">💰 ₹${amount}</p>
+          <p style="font-size:24px;color:#4CAF50;text-align:center">💰 Grand Total: ₹${amount}</p>
           <p><b>Name:</b> ${name}</p>
           <p><b>Phone:</b> +91 ${phone}</p>
           <p><b>Address:</b> ${fullAddress}</p>
@@ -168,7 +203,10 @@ app.post('/create-order', async (req, res) => {
 
 app.post('/verify-payment', async (req, res) => {
   try {
-    const { payment_id, order_id, signature, product_name, amount, quantity, address, photo_base64, custom_details } = req.body;
+    const {
+      payment_id, order_id, signature, product_name, amount, quantity,
+      address, photo_base64, custom_details, products,
+    } = req.body;
     if (!payment_id || !order_id || !signature)
       return res.status(400).json({ error: 'Missing required fields' });
 
@@ -193,6 +231,10 @@ app.post('/verify-payment', async (req, res) => {
       paymentId:     payment_id,
       photoBase64:   photo_base64   || null,
       customDetails: custom_details || null,
+      // NEW: complete cart, when the client sends it — every purchased
+      // product, each with its own name/price/quantity/subtotal. Nothing
+      // is discarded to a single merged "N items" line anymore.
+      products:      Array.isArray(products) ? products : null,
     }));
   } catch (error) {
     res.status(500).json({ error: 'Verification error', details: error.message });
@@ -201,7 +243,7 @@ app.post('/verify-payment', async (req, res) => {
 
 app.post('/cod-order', async (req, res) => {
   try {
-    const { product_name, amount, quantity, address, photo_base64, custom_details } = req.body;
+    const { product_name, amount, quantity, address, photo_base64, custom_details, products } = req.body;
     if (!product_name || !amount)
       return res.status(400).json({ error: 'Missing required fields' });
     const orderId = `GK${Date.now()}`;
@@ -216,6 +258,7 @@ app.post('/cod-order', async (req, res) => {
       paymentId:     null,
       photoBase64:   photo_base64   || null,
       customDetails: custom_details || null,
+      products:      Array.isArray(products) ? products : null,
     }));
   } catch (error) {
     res.status(500).json({ error: 'COD order error', details: error.message });
