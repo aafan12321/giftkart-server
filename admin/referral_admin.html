@@ -1,0 +1,144 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Gift Kart · Referral admin</title>
+<style>
+  :root{--navy:#0F172A;--gold:#D4AF37;--bg:#F8FAFC;--card:#fff;--line:#E5E9F0;--muted:#64748B;--ok:#16a34a;--bad:#dc2626}
+  *{box-sizing:border-box} body{margin:0;font:14px/1.4 system-ui,sans-serif;background:var(--bg);color:var(--navy)}
+  header{background:var(--navy);color:#fff;padding:16px 24px;display:flex;gap:16px;align-items:center;flex-wrap:wrap}
+  header h1{font-size:18px;margin:0;flex:1} header h1 span{color:var(--gold)}
+  main{max-width:1200px;margin:0 auto;padding:20px}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:16px;margin-bottom:16px}
+  .stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px}
+  .stat b{display:block;font-size:24px} .stat small{color:var(--muted)}
+  label{display:block;font-size:12px;color:var(--muted);margin-bottom:4px}
+  input,select,button{font:inherit;padding:8px 10px;border:1px solid var(--line);border-radius:10px;background:#fff}
+  button{cursor:pointer;background:var(--navy);color:#fff;border-color:var(--navy)} button.alt{background:#fff;color:var(--navy)}
+  button.warn{background:#fff;color:var(--bad);border-color:var(--bad)} button:disabled{opacity:.5}
+  .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:12px}
+  .row{display:flex;gap:8px;flex-wrap:wrap;align-items:end}
+  table{width:100%;border-collapse:collapse;font-size:13px} th,td{padding:8px;border-bottom:1px solid var(--line);text-align:left;vertical-align:top}
+  th{color:var(--muted);font-weight:600;white-space:nowrap} .scroll{overflow-x:auto}
+  .pill{padding:2px 8px;border-radius:99px;font-size:12px;background:#eef2f7} .pill.redeemed{background:#dcfce7;color:var(--ok)}
+  .pill.blocked{background:#fee2e2;color:var(--bad)} .pill.applied{background:#fef3c7;color:#92400e}
+  #msg{margin:8px 0;color:var(--muted)} .err{color:var(--bad)}
+</style>
+</head>
+<body>
+<header>
+  <h1>Gift Kart <span>Referral admin</span></h1>
+  <div class="row"><input id="key" type="password" placeholder="Admin API key" autocomplete="off"><button id="connect">Connect</button></div>
+</header>
+<main>
+  <div id="msg">Enter your ADMIN_API_KEY to load data. The key stays in this tab only.</div>
+
+  <div class="card"><div class="stats" id="stats"></div></div>
+
+  <div class="card">
+    <h3 style="margin-top:0">Settings</h3>
+    <div class="grid">
+      <div><label>Referral feature</label><select id="enabled"><option value="true">Enabled</option><option value="false">Disabled</option></select></div>
+      <div><label>Discount (₹)</label><input id="discountAmount" type="number" min="1"></div>
+      <div><label>Minimum order value (₹, 0 = none)</label><input id="minOrderValue" type="number" min="0"></div>
+      <div><label>Referrer reward</label><select id="referrerRewardEnabled"><option value="false">Off</option><option value="true">On</option></select></div>
+      <div><label>Referrer reward amount (₹)</label><input id="referrerRewardAmount" type="number" min="0"></div>
+      <div><label>Only accounts created after</label><input id="eligibleAccountsCreatedAfter" type="datetime-local"></div>
+      <div><label>Application expiry (days, 0 = never)</label><input id="applicationExpiryDays" type="number" min="0"></div>
+      <div><label>Payment hold (minutes)</label><input id="reservationTtlMinutes" type="number" min="1"></div>
+      <div><label>Max invalid tries before lockout</label><input id="maxInvalidAttempts" type="number" min="1"></div>
+      <div><label>Lockout (minutes)</label><input id="lockoutMinutes" type="number" min="1"></div>
+      <div><label>Block same phone as referrer</label><select id="blockSameDevice"><option value="true">On (recommended)</option><option value="false">Off (testing on one phone)</option></select></div>
+    </div>
+    <p><button id="save">Save settings</button></p>
+  </div>
+
+  <div class="card">
+    <div class="row" style="margin-bottom:12px">
+      <div><label>Search</label><input id="search" placeholder="name, email, code, order ID"></div>
+      <div><label>Status</label><select id="status"><option value="">All</option><option>applied</option><option>redeemed</option><option>expired</option><option>blocked</option></select></div>
+      <button id="reload" class="alt">Apply filters</button><button id="csv" class="alt">Export CSV</button>
+    </div>
+    <div class="scroll"><table><thead><tr>
+      <th>Referrer</th><th>Referred user</th><th>Code</th><th>Status</th><th>Applied</th><th>Redeemed</th><th>Order</th><th>Saved</th><th>Actions</th>
+    </tr></thead><tbody id="rows"></tbody></table></div>
+  </div>
+
+  <div class="card"><h3 style="margin-top:0">Fraud flags</h3><div class="scroll"><table><thead><tr><th>When</th><th>Type</th><th>User</th><th>Other</th></tr></thead><tbody id="flags"></tbody></table></div></div>
+</main>
+<script>
+const API = '/admin/referral/api';
+const $ = (id) => document.getElementById(id);
+let KEY = sessionStorage.getItem('gk_admin_key') || '';
+if (KEY) $('key').value = KEY;
+
+function msg(t, bad) { const m = $('msg'); m.textContent = t; m.className = bad ? 'err' : ''; }
+async function call(path, opts = {}) {
+  const r = await fetch(API + path, { ...opts, headers: { 'x-admin-key': KEY, 'Content-Type': 'application/json' } });
+  if (r.status === 401) throw new Error('Wrong admin key');
+  if (r.status === 503) throw new Error('Admin API disabled: set ADMIN_API_KEY on the server');
+  if (!r.ok) throw new Error('Request failed (' + r.status + ')');
+  return r;
+}
+// All dynamic text goes through textContent — user names/emails are never parsed as HTML.
+function td(tr, text, cls) { const c = document.createElement('td'); if (cls) { const s = document.createElement('span'); s.className = 'pill ' + cls; s.textContent = text; c.appendChild(s); } else c.textContent = text == null ? '' : String(text); tr.appendChild(c); return c; }
+const fmt = (t) => (t ? new Date(t).toLocaleString() : '');
+
+async function loadAll() {
+  try {
+    const [a, c] = await Promise.all([call('/analytics').then(r => r.json()), call('/config').then(r => r.json())]);
+    const st = $('stats'); st.textContent = '';
+    [['Total referrals', a.totalReferrals], ['Redeemed', a.redeemed], ['Redemption rate', a.redemptionRate + '%'],
+     ['Discount given', '₹' + a.totalDiscountGiven], ['Applied (pending)', a.applied], ['Blocked', a.blocked], ['Fraud flags', a.flags]]
+      .forEach(([k, v]) => { const d = document.createElement('div'); d.className = 'stat'; const b = document.createElement('b'); b.textContent = v; const s = document.createElement('small'); s.textContent = k; d.append(b, s); st.appendChild(d); });
+    for (const k of ['discountAmount','minOrderValue','referrerRewardAmount','applicationExpiryDays','reservationTtlMinutes','maxInvalidAttempts','lockoutMinutes']) $(k).value = c[k];
+    $('enabled').value = String(c.enabled); $('blockSameDevice').value = String(c.blockSameDevice); $('referrerRewardEnabled').value = String(c.referrerRewardEnabled);
+    $('eligibleAccountsCreatedAfter').value = c.eligibleAccountsCreatedAfter ? new Date(c.eligibleAccountsCreatedAfter - new Date().getTimezoneOffset()*60000).toISOString().slice(0,16) : '';
+    await loadRows(); await loadFlags(); msg('Connected.');
+  } catch (e) { msg(e.message, true); }
+}
+function q() { return '?search=' + encodeURIComponent($('search').value) + '&status=' + encodeURIComponent($('status').value); }
+async function loadRows() {
+  const rows = await (await call('/referrals' + q())).json();
+  const tb = $('rows'); tb.textContent = '';
+  rows.forEach((r) => {
+    const tr = document.createElement('tr');
+    td(tr, (r.referrerName || '') + ' ' + (r.referrerEmail || ''));
+    td(tr, (r.referredName || '') + ' ' + (r.referredEmail || ''));
+    td(tr, r.code); td(tr, r.status, r.status); td(tr, fmt(r.appliedAt)); td(tr, fmt(r.redeemedAt));
+    td(tr, r.orderId); td(tr, r.amountSaved ? '₹' + r.amountSaved : '');
+    const act = document.createElement('td');
+    const b1 = document.createElement('button'); b1.className = 'warn'; b1.textContent = 'Block code';
+    b1.onclick = async () => { await call('/block-code', { method: 'POST', body: JSON.stringify({ code: r.code, blocked: true }) }); loadAll(); };
+    const b2 = document.createElement('button'); b2.className = 'warn'; b2.textContent = 'Block user'; b2.style.marginLeft = '6px';
+    b2.onclick = async () => { await call('/block-user', { method: 'POST', body: JSON.stringify({ uid: r.referredUid, blocked: true }) }); loadAll(); };
+    act.append(b1, b2); tr.appendChild(act); tb.appendChild(tr);
+  });
+}
+async function loadFlags() {
+  const fl = await (await call('/flags')).json();
+  const tb = $('flags'); tb.textContent = '';
+  fl.forEach((f) => { const tr = document.createElement('tr'); td(tr, fmt(f.at)); td(tr, f.type); td(tr, f.uid); td(tr, f.other); tb.appendChild(tr); });
+}
+$('connect').onclick = () => { KEY = $('key').value.trim(); sessionStorage.setItem('gk_admin_key', KEY); loadAll(); };
+$('reload').onclick = () => loadRows().catch(e => msg(e.message, true));
+$('save').onclick = async () => {
+  const n = (id) => Number($(id).value);
+  const dt = $('eligibleAccountsCreatedAfter').value;
+  const body = { enabled: $('enabled').value === 'true', discountAmount: n('discountAmount'), minOrderValue: n('minOrderValue'),
+    referrerRewardEnabled: $('referrerRewardEnabled').value === 'true', referrerRewardAmount: n('referrerRewardAmount'),
+    eligibleAccountsCreatedAfter: dt ? new Date(dt).toISOString() : '', applicationExpiryDays: n('applicationExpiryDays'),
+    reservationTtlMinutes: n('reservationTtlMinutes'), maxInvalidAttempts: n('maxInvalidAttempts'), lockoutMinutes: n('lockoutMinutes'), blockSameDevice: $('blockSameDevice').value === 'true' };
+  try { await call('/config', { method: 'PUT', body: JSON.stringify(body) }); msg('Settings saved.'); loadAll(); } catch (e) { msg(e.message, true); }
+};
+$('csv').onclick = async () => {
+  try {
+    const blob = await (await call('/referrals.csv' + q())).blob();
+    const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = 'referrals.csv'; a.click(); URL.revokeObjectURL(a.href);
+  } catch (e) { msg(e.message, true); }
+};
+if (KEY) loadAll();
+</script>
+</body>
+</html>
