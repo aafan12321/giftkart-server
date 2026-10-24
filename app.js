@@ -198,7 +198,7 @@ function createApp({ razorpay, store, mailer, referral, config, logger = console
     const id = String(req.query.razorpay_order_id || '');
     if (!isValidRzpOrderId(id)) return res.status(400).json({ success: false, error: 'invalid_order_id' });
     try {
-      const s = await service.paymentStatus(id);
+      const s = await service.paymentStatus(id, { cancelled: req.query.cancelled === '1' });
       const auth = await optionalAuth(req);
       if (s.uid && auth && auth.uid && s.uid !== auth.uid) return res.status(403).json({ success: false, error: 'forbidden' });
       res.json({

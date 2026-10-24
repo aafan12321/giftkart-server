@@ -415,6 +415,22 @@ test('payment-status: another user cannot read someone else\'s payment (uid mism
   await h.close();
 });
 
+
+test('payment-status: abandoned UPI attempt does not block the customer (stale, or cancelled=1)', async () => {
+  const h = await boot();
+  const rid = await h.createOrder();
+  h.razorpay.addPayment(rid, { status: 'created', created_at: Math.floor(Date.now() / 1000) - 120 });
+  assert.equal((await h.get(`/payment-status?razorpay_order_id=${rid}`)).body.state, 'not_paid', 'stale created attempt');
+  const rid2 = await h.createOrder();
+  h.razorpay.addPayment(rid2, { status: 'created', created_at: Math.floor(Date.now() / 1000) - 5 });
+  assert.equal((await h.get(`/payment-status?razorpay_order_id=${rid2}`)).body.state, 'pending', 'fresh attempt still pending');
+  assert.equal((await h.get(`/payment-status?razorpay_order_id=${rid2}&cancelled=1`)).body.state, 'not_paid', 'cancelled=1 is final');
+  const rid3 = await h.createOrder();
+  h.razorpay.addPayment(rid3, { status: 'captured' });
+  assert.equal((await h.get(`/payment-status?razorpay_order_id=${rid3}&cancelled=1`)).body.state, 'paid', 'a real capture always wins');
+  await h.close();
+});
+
 // ── reconcile / monitoring ───────────────────────────────────────────────────
 test('reconcile: captured payment the app never confirmed is recovered + owner alerted; foreign payments only alert', async () => {
   const h = await boot();

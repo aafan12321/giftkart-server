@@ -67,7 +67,7 @@ function createPaymentsService({ razorpay, store, mailer, referral, config = {},
     return payment;
   }
 
-  async function fetchPaymentTruth(rzpOrderId) {
+  async function fetchPaymentTruth(rzpOrderId, { cancelled = false } = {}) {
     const res = await rz(razorpay.orders.fetchPayments(rzpOrderId), 'orders.fetchPayments');
     const items = (res && res.items) || [];
     const captured = items.find((p) => p.status === 'captured');
@@ -78,7 +78,11 @@ function createPaymentsService({ razorpay, store, mailer, referral, config = {},
       return p && p.status === 'captured' ? { state: 'paid', payment: p } : { state: 'pending', payment: p };
     }
     const nowSec = now() / 1000;
-    if (items.some((p) => p.status === 'created' && nowSec - p.created_at < 30 * 60)) return { state: 'pending' };
+    // A UPI attempt the customer abandoned stays 'created' at Razorpay for a long time.
+    // Only treat a very fresh one as 'still in progress', and not at all when the app
+    // says the customer cancelled (a real payment shows up as authorized/captured).
+    const pendingSec = cancelled ? 0 : 60;
+    if (pendingSec > 0 && items.some((p) => p.status === 'created' && nowSec - p.created_at < pendingSec)) return { state: 'pending' };
     return { state: 'not_paid', attempts: items.length, failed: items.some((p) => p.status === 'failed') };
   }
 
@@ -272,14 +276,14 @@ function createPaymentsService({ razorpay, store, mailer, referral, config = {},
     return { ...fin, referral: ref };
   }
 
-  async function paymentStatus(rzpOrderId) {
+  async function paymentStatus(rzpOrderId, opts = {}) {
     if (!isValidRzpOrderId(rzpOrderId)) return { state: 'unknown' };
     const p = await store.getPayment(rzpOrderId);
     if (p && p.status === 'paid') {
       return { state: 'paid', orderId: p.orderId || orderIdFor(rzpOrderId), paymentId: p.paymentId, amountPaise: p.amountPaidPaise, uid: p.uid || null };
     }
     let truth;
-    try { truth = await fetchPaymentTruth(rzpOrderId); }
+    try { truth = await fetchPaymentTruth(rzpOrderId, opts); }
     catch (e) { if (isNotFound(e)) return { state: 'unknown' }; throw e; }
     if (truth.state === 'paid') {
       if (!p && !(await isOurOrder(rzpOrderId))) return { state: 'unknown' };
